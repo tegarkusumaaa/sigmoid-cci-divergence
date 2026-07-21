@@ -1,0 +1,90 @@
+//@version=5
+// ============================================================================
+// Title       : Sigmoid CCI 100 - Divergence & Momentum Weakening
+// Author      : Tegar Kusuma (@tegarkusumaaa)
+// License     : MIT License
+// Description : Normalized Commodity Channel Index (CCI) mapped via Logistic
+//               Sigmoid function (0-100 scale) with automated pivot divergence 
+//               and saturation-zone momentum weakening detection.
+// ============================================================================
+
+indicator("Sigmoid CCI 100 - Divergence & Momentum Weakening", shorttitle="Sigmoid CCI [TK]", overlay=false, precision=2, max_bars_back=2000)
+
+// ----------------------------------------------------------------------------
+// [ INPUT PARAMETERS ]
+// ----------------------------------------------------------------------------
+GRP_CALC = "CCI & Sigmoid Configuration"
+len_cci   = input.int(18, "CCI Period", minval=1, group=GRP_CALC, tooltip="Lookback period for Commodity Channel Index calculation")
+sig_alpha = input.float(0.015, "Sigmoid Sensitivity (Alpha)", minval=0.001, step=0.001, group=GRP_CALC, tooltip="Controls non-linear compression slope")
+
+GRP_LVL  = "Threshold Levels"
+ob_level  = input.float(75.0, "Overbought Level", group=GRP_LVL)
+os_level  = input.float(25.0, "Oversold Level", group=GRP_LVL)
+sat_level = input.float(90.0, "Saturation Level", group=GRP_LVL, tooltip="Upper saturation threshold for momentum weakening detection")
+
+GRP_PIV  = "Pivot & Divergence Engine"
+lookback  = input.int(5, "Pivot Lookback", minval=1, group=GRP_PIV, tooltip="Pivot detection lookback bars for swing high/low capture")
+
+// ----------------------------------------------------------------------------
+// [ CALCULATIONS ]
+// ----------------------------------------------------------------------------
+// Standard Commodity Channel Index (CCI)
+src_price = hl2
+sma_price = ta.sma(src_price, len_cci)
+mean_dev  = ta.sma(math.abs(src_price - sma_price), len_cci)
+raw_cci   = mean_dev == 0 ? 0.0 : (src_price - sma_price) / (0.015 * mean_dev)
+
+// Non-Linear Logistic Sigmoid Normalization (Scaled 0 to 100)
+sigmoid_cci = (1.0 / (1.0 + math.exp(-sig_alpha * raw_cci))) * 100.0
+
+// ----------------------------------------------------------------------------
+// [ PIVOT & DIVERGENCE ENGINE ]
+// ----------------------------------------------------------------------------
+ph = ta.pivothigh(sigmoid_cci, lookback, lookback)
+pl = ta.pivotlow(sigmoid_cci, lookback, lookback)
+
+var float last_ph_cci   = na
+var float last_ph_price = na
+var float last_pl_cci   = na
+var float last_pl_price = na
+
+// Historical Pivot State Memory Updates
+if not na(ph) and ph >= ob_level
+    last_ph_cci   := ph
+    last_ph_price := high[lookback]
+
+if not na(pl) and pl <= os_level
+    last_pl_cci   := pl
+    last_pl_price := low[lookback]
+
+// 1. Classic Divergence Logic
+bearish_div = not na(ph) and ph >= ob_level and ph < last_ph_cci[1] and high[lookback] > last_ph_price[1]
+bullish_div = not na(pl) and pl <= os_level and pl > last_pl_cci[1] and low[lookback] < last_pl_price[1]
+
+// 2. Momentum Saturation Weakening Logic
+bearish_weak = not na(ph) and ph >= sat_level and ph >= last_ph_cci[1] and high[lookback] > last_ph_price[1]
+bullish_weak = not na(pl) and pl <= (100.0 - sat_level) and pl <= last_pl_cci[1] and low[lookback] < last_pl_price[1]
+
+// ----------------------------------------------------------------------------
+// [ VISUALIZATION & RENDER ]
+// ----------------------------------------------------------------------------
+sig_color = sigmoid_cci > ob_level ? color.red : sigmoid_cci < os_level ? color.green : color.gray
+plot(sigmoid_cci, "Sigmoid CCI", color=sig_color, linewidth=2)
+
+// Reference Level Lines
+p_ob     = hline(ob_level, "OB Level", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+p_sat_hi = hline(sat_level, "Sat High", color=color.new(color.orange, 70), linestyle=hline.style_dotted)
+hline(50.0, "Midline", color=color.new(color.gray, 60))
+p_sat_lo = hline(100.0 - sat_level, "Sat Low", color=color.new(color.orange, 70), linestyle=hline.style_dotted)
+p_os     = hline(os_level, "OS Level", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+
+// Zone Visual Fills
+fill(p_ob, p_sat_hi, color=color.new(color.red, 92), title="Overbought Saturation Fill")
+fill(p_os, p_sat_lo, color=color.new(color.green, 92), title="Oversold Saturation Fill")
+
+// Signal Labels
+plotshape(bearish_div, "Bearish Div", shape.labeldown, location.top, color.red, text="SELL DIV", textcolor=color.white, offset=-lookback)
+plotshape(bullish_div, "Bullish Div", shape.labelup, location.bottom, color.green, text="BUY DIV", textcolor=color.white, offset=-lookback)
+
+plotshape(bearish_weak, "Bearish Weak", shape.labeldown, location.top, color.orange, text="SELL WEAK", textcolor=color.black, offset=-lookback)
+plotshape(bullish_weak, "Bullish Weak", shape.labelup, location.bottom, color.orange, text="BUY WEAK", textcolor=color.black, offset=-lookback)
